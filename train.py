@@ -79,7 +79,7 @@ def train(opt):
     dataset.set_option(data_type={'whole_story': False, 'split_story': True, 'caption': True}) # 若不使用caption数据，则将其设为False
     dataset.train()
     train_loader = DataLoader(dataset, batch_size=opt.batch_size, shuffle=opt.shuffle)
-    dataset.test() # 改为valid
+    dataset.val() # 改为valid
     val_loader = DataLoader(dataset, batch_size=opt.batch_size, shuffle=False)
     # m = dataset.word2id
 
@@ -200,18 +200,20 @@ if __name__ == "__main__":
     opt.self_att = False
     opt.cnn_cap = False
     opt.bi = False
-
-    opt.context_dec = True
+    opt.dec = True
+    opt.mem = True
+    # opt.context_dec = True
     opt.trick = True
-    opt.option = 'train'
+    opt.option = 'test'
+    opt.swish = True
     # opt.id = 'test'
-    # opt.resume_from = "./data/multhead"
+    opt.resume_from = "./data/resnetout"
     # 训练模式还是测试模式
     if opt.option == 'train':
         print('Begin training:')
         train(opt)
     else:
-        opt.resume_from = './data/' + opt.id + '/'
+        # opt.resume_from = './data/' + opt.id + '/'
         print(opt.resume_from)
         print('Begin testing:')
         test(opt)

@@ -82,6 +82,8 @@ class Evaluator:
                 vid, seq = line.strip().split('\t')
                 if vid not in predictions:
                     predictions[vid] = [seq]
+        print(len(self.reference))
+        print(len(predictions))
         self.eval.evaluate(self.reference, predictions)
         with open(json_prediction_file, 'w') as f:
             json.dump(predictions, f)
@@ -163,6 +165,7 @@ class Evaluator:
         logging.info("Evaluating...")
         start = time.time()
         model.eval()
+        # dataset.test()
         dataset.test()
 
         predictions = {}

@@ -13,6 +13,10 @@ def parse_opt():
     parser.add_argument('--bi', type=bool, default=False)
     parser.add_argument('--context_dec', type=bool, default=False)
     parser.add_argument('--trick', type=bool, default=False)
+    parser.add_argument('--dec', type=bool, default=False)
+    parser.add_argument('--mem', type=bool, default=False)
+    parser.add_argument('--swish', type=bool, default=False)
+
 
     # album
     parser.add_argument('--window', type=int, default=4)
@@ -56,7 +60,7 @@ def parse_opt():
                         help='whether to use position embedding for the image feature')
 
     # Optimization: General
-    parser.add_argument('--max_epochs', type=int, default=100,
+    parser.add_argument('--max_epochs', type=int, default=50,
                         help='number of epochs')
     parser.add_argument('--shuffle', type=bool, default=True,
                         help='set to True to have the data reshuffled at every epoch during training ')

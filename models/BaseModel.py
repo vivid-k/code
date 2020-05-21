@@ -127,7 +127,7 @@ class BaseModel(nn.Module):
         if self.opt.caption: # 引入caption
             out_caption, enc_state = self.caption_encoder(caption, self.embed) # 320*20*512
         # 对图像特征编码
-        out_e, enc_state, mem = self.encoder(features) # out_e：64*5*512
+        out_e, enc_state = self.encoder(features) # out_e：64*5*512
         out_e = out_e.contiguous()
         out_e = out_e.view(-1, out_e.size(2)) # 320*512
         story_t = story_t.view(-1, story_t.size(2)) # 320*30
@@ -172,7 +172,7 @@ class BaseModel(nn.Module):
         if beam_size == 1:  # if beam_size is 1, then do greedy decoding, otherwise use beam search
             return self.sample(features, sample_max=True, rl_training=False)
         
-        out_e, enc_state, mem = self.encoder(features) # encode the visual features 64*5*512
+        out_e, enc_state = self.encoder(features) # encode the visual features 64*5*512
         out_e = out_e.contiguous()
         out_e = out_e.view(-1, out_e.size(2)) # 320*512
         if self.opt.caption:
@@ -226,7 +226,8 @@ class BaseModel(nn.Module):
                     break
                 # 之前的cost+概率分布*mask（mask标记是否生成结束，结束后为0，不再累计损失）
                 next_costs = (all_costs[-1, :, None] + neg_log_probs.data.cpu().numpy() * all_masks[-1, :, None]) # 计算cost，all_mask一个数乘以前面一行，3*9837
-                next_costs = next_costs[:] + bag * self.opt.scale
+                if self.opt.trick:
+                    next_costs = next_costs[:] + bag * self.opt.scale
                 (finished,) = np.where(all_masks[-1] == 0) # 找出最后一行为0的位置，finished记录了所有mask为0的索引
 
                 next_costs[finished, 1:] = np.inf # 如果已经结束，则除了结束符外的cost设置为无穷大

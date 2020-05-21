@@ -39,6 +39,22 @@ class PositionwiseFeedForward(nn.Module):
         output = self.layer_norm(output + residual)
         return output
 
+class EncoderLayer(nn.Module):
+    ''' Compose with two layers '''
+
+    def __init__(self, d_model, d_inner, n_head=8, d_k=64, d_v=64, dropout=0.1):
+        super(EncoderLayer, self).__init__()
+        self.slf_attn = MultiHeadAttention(
+            n_head, d_model, d_k, d_v, dropout=dropout)
+        self.pos_ffn = PositionwiseFeedForward(d_model, d_inner, dropout=dropout)
+
+    def forward(self, enc_input):
+        enc_output, enc_slf_attn = self.slf_attn(
+            enc_input, enc_input, enc_input)
+        enc_output = self.pos_ffn(enc_output)
+
+        return enc_output, enc_slf_attn
+
 class AttentionLayer(nn.Module):
     def __init__(self, hidden_dim_en, hidden_dim_de, projected_size):
         super(AttentionLayer, self).__init__()
@@ -149,25 +165,43 @@ class VisualEncoder(nn.Module):
                                dropout=self.dropout, batch_first=True, bidirectional=True)
         else:
             raise Exception("RNN type is not supported: {}".format(self.rnn_type))
-
-        if self.opt.context_dec:
-            self.rnn_dec = nn.LSTM(input_size=self.embed_dim, hidden_size=self.hidden_dim,
+        self.rnn_dec = nn.LSTM(input_size=self.embed_dim, hidden_size=self.hidden_dim,
                                  dropout=self.dropout, batch_first=True, bidirectional=False)
+        if self.opt.mem:
+            self.linear_read = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
+            self.linear_write = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
+            self.linear_mem = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
             # self.linear_fun = nn.Sequential(nn.Linear(self.hidden_dim * 2, self.hidden_dim),
             #                             nn.BatchNorm1d(self.hidden_dim),
             #                             nn.ReLU(True))
-            # 线性层 + 门控
+        if self.opt.context_dec:   
             # self.attention = MultiHeadAttention(8, self.hidden_dim, 64, 64)
             # self.pos_ffn = PositionwiseFeedForward(self.hidden_dim, 2048)
-            self.attention = luong_gate_attention(self.hidden_dim, self.embed_dim)
-            self.linear_read = nn.Sequential(nn.Linear(self.hidden_dim * 2, self.hidden_dim), nn.Sigmoid())
-            self.linear_write = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
-            self.linear_mem = nn.Linear(self.hidden_dim * 3, self.hidden_dim)
-            # self.position_enc = nn.Embedding.from_pretrained(get_sinusoid_encoding_table(self.hidden_dim), freeze=True)
+            self.layer_stack = nn.ModuleList([EncoderLayer(self.hidden_dim, 2048) for _ in range(3)])
+            self.position_enc = nn.Embedding.from_pretrained(get_sinusoid_encoding_table(self.hidden_dim), freeze=True)
+            # self.attention = luong_gate_attention(self.hidden_dim, self.embed_dim)
+            # self.transformer = nn.TransformerEncoderLayer(512, 8)
+            # self.transformer_encoder = nn.TransformerEncoder(self.transformer, 6)
+            self.linear_fun = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+        if self.opt.swish:
+            self.sw1 = nn.Sequential(nn.Conv1d(self.hidden_dim, self.hidden_dim, kernel_size=1, padding=0), nn.BatchNorm1d(self.hidden_dim), nn.ReLU())
+            self.sw3 = nn.Sequential(nn.Conv1d(self.hidden_dim, self.hidden_dim, kernel_size=1, padding=0), nn.ReLU(), nn.BatchNorm1d(self.hidden_dim),
+                                     nn.Conv1d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1), nn.ReLU(), nn.BatchNorm1d(self.hidden_dim))
+            self.sw33 = nn.Sequential(nn.Conv1d(self.hidden_dim, self.hidden_dim, kernel_size=1, padding=0), nn.ReLU(), nn.BatchNorm1d(self.hidden_dim),
+                                      nn.Conv1d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1), nn.ReLU(), nn.BatchNorm1d(self.hidden_dim),
+                                      nn.Conv1d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1), nn.ReLU(), nn.BatchNorm1d(self.hidden_dim))
+            self.linear = nn.Sequential(nn.Linear(2*self.hidden_dim, 2*self.hidden_dim), nn.GLU(), nn.Dropout(self.dropout))
+            self.filter_linear = nn.Linear(3*self.hidden_dim, self.hidden_dim)
+            # self.tanh = nn.Tanh()
+            self.sigmoid = nn.Sigmoid()
+        # else:
+        #     # 线性层 + 门控
+        #     self.linear_read = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
+        #     self.linear_write = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
+        #     self.linear_mem = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+            
         self.project_layer = nn.Linear(self.hidden_dim * 2, self.embed_dim)
         self.relu = nn.ReLU()
-        if self.with_position: # 是否可以改为transformer那样的position
-            self.position_embed = nn.Embedding(self.story_size, self.embed_dim)
 
     def init_hidden(self, batch_size, bi, dim):
         # LSTM的初始隐状态，默认为0
@@ -184,49 +218,90 @@ class VisualEncoder(nn.Module):
         batch_size, story_size = input.size(0), input.size(1) # (batch_size, 5, feat_size)
         emb = self.visual_emb(input.view(-1, self.feat_size)) # 过一个线性层，2048-512
         emb = emb.view(batch_size, story_size, -1)  # view变回三维 64*5*512
+        if self.opt.context_dec:
+            position = torch.tensor(list(range(story_size))).repeat(batch_size, 1).cuda()
+            position = self.position_enc(position)
+            enc_output = emb + position
+            # context, attention = self.attention(attin, attin, attin)
+
+            # att = self.pos_ffn(context)
+            for enc_layer in self.layer_stack:
+                enc_output, enc_slf_attn = enc_layer(enc_output)
+            # emb = self.transformer_encoder(attin)
+            emb = enc_output
+
         rnn_input = self.hin_dropout_layer(emb)  # apply dropout
         # if hidden is None:
         #     hidden = self.init_hidden(batch_size, bi=True, dim=self.hidden_dim // 2) # 最后一个维度为512/2=256
+        
         houts, hidden = self.rnn(rnn_input) #  hidden [2,64,512]
         
-        out = emb + self.project_layer(houts) # 原始的 visual_emb + rnn输出的结果, 即残差连接， 改为concat？
-        out = self.relu(out)  # (batch_size, 5, embed_dim)
+        out = emb + self.project_layer(houts)# 原始的 visual_emb + rnn输出的结果, 即残差连接， 改为concat？
 
-        if self.with_position:
-            for i in range(self.story_size):
-                position = torch.tensor(input.data.new(batch_size).long().fill_(i))
-                out[:, i, :] = out[:, i, :] + self.position_embed(position)
+        out = self.relu(out)  # (batch_size, 5, embed_dim)
+        state = (hidden[0].unsqueeze(0), hidden[1].unsqueeze(0))
         
-        if self.opt.context_dec:            
-            state = (hidden[0].unsqueeze(0), hidden[1].unsqueeze(0))
-            # self.attention.init_context(out)
-            # mem, weights = self.attention(out, selfatt=True)
-            # pos_inp = torch.tensor([0,1,2,3,4]).unsqueeze(0).cuda()
-            # pos_inp = pos_inp.repeat(batch_size, 1)
-            # pos = self.position_enc(pos_inp)
-            
-            # T_input = out + pos
-            # mem, _ = self.attention(T_input, T_input, T_input)
-            # mem = self.pos_ffn(mem)
-            mem = out
-            mem = mem.sum(dim=1) # 64*512
-            result = []
-            self.attention.init_context(out)
-            for i in range(self.story_size):
-                # graph_res = graph_attn(self.opt.alpha, state[0].squeeze(), out, self.story_size) # 64*6*1
-                # graph_res = torch.matmul(out.transpose(1, 2), weights).squeeze()
-                att, _ = self.attention(state[0].squeeze())
-                g_r = self.linear_read(torch.cat([state[0].squeeze(), att.squeeze()], dim=-1))
-                # g_r = self.linear_read(state[0].squeeze())
-                mem_inp = g_r * mem
-                inp = torch.cat((out[:, i, :], mem_inp, att), 1)
-                inp = self.linear_mem(inp).unsqueeze(1) # 64*1*512
-                output, state = self.rnn_dec(inp, state)
-                g_w = self.linear_write(state[0].squeeze())
-                mem = g_w * mem
-                result.append(output.squeeze())
-            out = torch.stack(result).transpose(0, 1)
-        return out, state, mem
+        if self.opt.dec:
+            result = []            
+            if self.opt.mem:
+                # tmp = torch.cat((att, out), 2)
+                # mem = self.linear_fun(tmp)
+                if self.opt.swish:
+                    outputs = out.transpose(1,2)
+                    conv1 = self.sw1(outputs)
+                    conv3 = self.sw3(outputs)
+                    conv33 = self.sw33(outputs)
+                    conv = torch.cat((conv1, conv3, conv33), 1)
+                    conv = self.filter_linear(conv.transpose(1,2))
+                case = 8
+                if case == 0: # 最基本的，out不更新
+                    mem = out * self.sigmoid(conv)
+                elif case == 1: # done done
+                    out = out * self.sigmoid(conv)
+                    mem = out
+                elif case == 2: # done done
+                    out = out * self.sigmoid(conv)
+                    mem = out + emb
+                elif case == 3: # done emb:done
+                    out = out * self.sigmoid(conv)
+                    mem = conv
+                elif case == 4: # done done
+                    out = out * self.sigmoid(conv)
+                    mem = conv + emb
+                elif case == 5: # done,jicha
+                    out = conv
+                    mem = out
+                elif case == 6: # done done
+                    mem = out * self.sigmoid(conv)
+                    out = conv
+                elif case == 7: # done done
+                    out = conv
+                    mem = out + emb                   
+                elif case == 8:
+                    mem = conv
+                mem = mem.sum(dim=1) # 64*512
+                # self.attention.init_context(out)
+                for i in range(self.story_size):
+                    # graph_res = graph_attn(self.opt.alpha, state[0].squeeze(), out, self.story_size) # 64*6*1
+                    # graph_res = torch.matmul(out.transpose(1, 2), weights).squeeze()
+                    # att, _ = self.attention(state[0].squeeze())
+                    # g_r = self.linear_read(torch.cat([state[0].squeeze(), att.squeeze()], dim=-1))
+                    g_r = self.linear_read(state[0].squeeze())
+                    mem_inp = g_r * mem
+                    inp = torch.cat((out[:, i, :], mem_inp), 1)
+                    inp = self.linear_mem(inp).unsqueeze(1) # 64*1*512
+                    output, state = self.rnn_dec(inp, state)
+                    g_w = self.linear_write(state[0].squeeze())
+                    mem = g_w * mem
+                    result.append(output.squeeze())
+                out = torch.stack(result).transpose(0, 1)
+            else:
+                for i in range(self.story_size):
+                    output, state = self.rnn_dec(out[:, i, :].unsqueeze(1), state)
+                    result.append(output.squeeze())
+                out = torch.stack(result).transpose(0, 1)
+
+        return out, state
 
 class CaptionEncoder(nn.Module):
 
