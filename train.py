@@ -202,12 +202,14 @@ if __name__ == "__main__":
     opt.bi = False
     opt.dec = True
     opt.mem = True
-    # opt.context_dec = True
+    opt.context_dec = False
     opt.trick = True
-    opt.option = 'test'
+    opt.option = 'train'
+    # opt.option = 'test'
     opt.swish = True
     # opt.id = 'test'
-    opt.resume_from = "./data/resnetout"
+    # opt.resume_from = "./data/case1"
+    
     # 训练模式还是测试模式
     if opt.option == 'train':
         print('Begin training:')
