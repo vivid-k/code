@@ -79,7 +79,7 @@ def train(opt):
     dataset.set_option(data_type={'whole_story': False, 'split_story': True, 'caption': True}) # 若不使用caption数据，则将其设为False
     dataset.train()
     train_loader = DataLoader(dataset, batch_size=opt.batch_size, shuffle=opt.shuffle)
-    dataset.val() # 改为valid
+    dataset.test() # 改为valid
     val_loader = DataLoader(dataset, batch_size=opt.batch_size, shuffle=False)
     # m = dataset.word2id
 
@@ -189,7 +189,7 @@ def test(opt):
 if __name__ == "__main__":
 
     opt = opts.parse_opt()
-    opt.GPU_ids = 0
+    opt.GPU_ids = 2
 
     # 设置 GPU id
     torch.cuda.set_device(opt.GPU_ids)
@@ -202,14 +202,15 @@ if __name__ == "__main__":
     opt.bi = False
     opt.dec = True
     opt.mem = True
-    opt.context_dec = False
+    # opt.context_dec = True
     opt.trick = True
+    opt.att = True
     opt.option = 'train'
+    opt.with_position = True
     # opt.option = 'test'
-    opt.swish = True
-    # opt.id = 'test'
-    # opt.resume_from = "./data/case1"
     
+    # opt.id = 'test'
+    # opt.resume_from = "./data/hlst/"
     # 训练模式还是测试模式
     if opt.option == 'train':
         print('Begin training:')

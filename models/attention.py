@@ -26,60 +26,198 @@ class ScaledDotProductAttention(nn.Module):
 
         return output, attn
 
+# class MultiHeadAttention(nn.Module):
+#     ''' Multi-Head Attention module '''
+
+#     def __init__(self, n_head, d_model, d_k, d_v, dropout=0.1):
+#         super().__init__()
+
+#         self.n_head = n_head
+#         self.d_k = d_k
+#         self.d_v = d_v
+
+#         self.w_qs = nn.Linear(d_model, n_head * d_k)
+#         self.w_ks = nn.Linear(d_model, n_head * d_k)
+#         self.w_vs = nn.Linear(d_model, n_head * d_v)
+#         nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+#         nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+#         nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_v)))
+
+#         self.attention = ScaledDotProductAttention(temperature=np.power(d_k, 0.5))
+#         self.layer_norm = nn.LayerNorm(d_model)
+
+#         self.fc = nn.Linear(n_head * d_v, d_model)
+#         nn.init.xavier_normal_(self.fc.weight)
+
+#         self.dropout = nn.Dropout(dropout)
+
+
+#     def forward(self, q, k, v, mask=None):
+
+#         d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
+
+#         sz_b, len_q, _ = q.size()
+#         sz_b, len_k, _ = k.size()
+#         sz_b, len_v, _ = v.size()
+
+#         residual = q
+
+#         q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
+#         k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
+#         v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
+
+#         q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k) # (n*b) x lq x dk
+#         k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_k, d_k) # (n*b) x lk x dk
+#         v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_v, d_v) # (n*b) x lv x dv
+
+#         # mask = mask.repeat(n_head, 1, 1) # (n*b) x .. x ..
+#         output, attn = self.attention(q, k, v, mask=mask)
+
+#         output = output.view(n_head, sz_b, len_q, d_v)
+#         output = output.permute(1, 2, 0, 3).contiguous().view(sz_b, len_q, -1) # b x lq x (n*dv)
+
+#         output = self.dropout(self.fc(output))
+#         output = self.layer_norm(output + residual)
+
+#         return output, attn
+class Attention(nn.Module):
+    """Scaled dot-product attention mechanism."""
+
+    def __init__(self, att_type, dim, dropout=0.0):
+        super(Attention, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.softmax = nn.Softmax(dim=1)
+        if att_type == 'additive':
+            self.W_additive = nn.Linear(in_features=2*dim, out_features=2*dim)
+            self.V_additive = nn.Linear(in_features=2*dim, out_features=1)
+
+        self.att_type = att_type
+
+    def calc_att_dist(self, q, k, scale, attn_mask):
+
+        if self.att_type == 'additive':
+            _, seq_len, _ = k.size()
+            q = q.repeat(1, seq_len, 1)  # bsz x seq_len x dim
+            att_features = torch.cat([q, k], dim=2)  # bsz x seq_len x dim
+            attention = self.V_additive(self.W_additive(att_features))  # bsz x seq_len x 1
+
+        else:
+            attention = torch.bmm(k, q.transpose(1, 2))
+            if scale is not None:
+                attention = attention * scale
+            if attn_mask is not None:
+                # 给需要mask的地方设置一个负无穷
+                attention = attention.masked_fill_(attn_mask, -np.inf)
+            # 计算softmax
+            attention = self.softmax(attention)
+            # 添加dropout
+            attention = self.dropout(attention)
+
+        return attention
+    def forward(self, q, k, v, scale=None, attn_mask=None):
+        """前向传播.
+
+        Args:
+            q: Queries tensor, bsz x 1 x q_dim
+            k: Keys tensor, bsz x seq_len x k_dim
+            v: Values tensor, bsz x seq_len x v_dim
+            scale: scale factor
+            attn_mask: Masking tensor, bsz x seq_len x 1
+        Returns:
+            context vector and attention dist
+        """
+        # attention = torch.bmm(q, k.transpose(1, 2))
+        # attention = torch.bmm(q, k).squeeze(1).unsqueeze(2)
+        attention = torch.bmm(k, q.transpose(1, 2))
+        if scale is not None:
+            attention = attention * scale
+        if attn_mask is not None:
+            # 给需要mask的地方设置一个负无穷
+            attention = attention.masked_fill_(attn_mask, -np.inf)
+        # 计算softmax
+        attention = self.softmax(attention)
+        # 添加dropout
+        attention = self.dropout(attention)
+        # 和V做点积
+        context = torch.bmm(attention.transpose(1, 2), v).squeeze(1)
+        # context = attention * v
+        return context, attention
 class MultiHeadAttention(nn.Module):
-    ''' Multi-Head Attention module '''
 
-    def __init__(self, n_head, d_model, d_k, d_v, dropout=0.1):
-        super().__init__()
+    def __init__(self, n_hidden_size, num_heads=4, att_type='scaled-dot', dropout=0.5):
+        super(MultiHeadAttention, self).__init__()
 
-        self.n_head = n_head
-        self.d_k = d_k
-        self.d_v = d_v
+        self.dim_per_head = n_hidden_size // num_heads
+        self.num_heads = num_heads
 
-        self.w_qs = nn.Linear(d_model, n_head * d_k)
-        self.w_ks = nn.Linear(d_model, n_head * d_k)
-        self.w_vs = nn.Linear(d_model, n_head * d_v)
-        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
-        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
-        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_v)))
+        self.query = nn.Parameter(torch.zeros(n_hidden_size)).float()
 
-        self.attention = ScaledDotProductAttention(temperature=np.power(d_k, 0.5))
-        self.layer_norm = nn.LayerNorm(d_model)
+        self.linear_q = nn.Linear(n_hidden_size, self.dim_per_head*num_heads)
+        self.linear_k = nn.Linear(n_hidden_size, self.dim_per_head*num_heads)
+        self.linear_v = nn.Linear(n_hidden_size, self.dim_per_head*num_heads)
 
-        self.fc = nn.Linear(n_head * d_v, d_model)
-        nn.init.xavier_normal_(self.fc.weight)
+        dim = None
+        if att_type == 'additive':
+            dim = self.dim_per_head
+        self.dot_product_attention = Attention(att_type=att_type, dim=dim, dropout=dropout)
+
+        self.linear_final = nn.Linear(self.dim_per_head*num_heads, n_hidden_size)
 
         self.dropout = nn.Dropout(dropout)
 
+        self.layer_norm = nn.LayerNorm(n_hidden_size)
 
-    def forward(self, q, k, v, mask=None):
+        self.att_type = att_type
 
-        d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
+    def forward(self, key, value, attn_mask=None):
+        """
 
-        sz_b, len_q, _ = q.size()
-        sz_b, len_k, _ = k.size()
-        sz_b, len_v, _ = v.size()
+        :param key: bsz x seq_len x n_hsz
+        :param value: bsz x seq_len x n_hsz
+        :param attn_mask: bsz x seq_len x 1
+        :return:
+        """
+        dim_per_head = self.dim_per_head
+        num_heads = self.num_heads
 
-        residual = q
+        bsz, seq_len, _ = key.size()
 
-        q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
-        k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
-        v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
+        # construct the query
+        query = self.query.repeat(bsz, 1, 1)  # bsz x 1 x n_hidden_size
 
-        q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k) # (n*b) x lq x dk
-        k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_k, d_k) # (n*b) x lk x dk
-        v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_v, d_v) # (n*b) x lv x dv
+        # linear projection
+        query = self.linear_q(query)
+        key = self.linear_k(key)
+        value = self.linear_v(value)
 
-        # mask = mask.repeat(n_head, 1, 1) # (n*b) x .. x ..
-        output, attn = self.attention(q, k, v, mask=mask)
+        # split by heads
+        query = query.view(bsz*num_heads, -1, dim_per_head)
+        key = key.view(bsz*num_heads, -1, dim_per_head)
+        value = value.view(bsz*num_heads, -1 ,dim_per_head)
 
-        output = output.view(n_head, sz_b, len_q, d_v)
-        output = output.permute(1, 2, 0, 3).contiguous().view(sz_b, len_q, -1) # b x lq x (n*dv)
+        if attn_mask is not None:
+            attn_mask = attn_mask.unsqueeze(2)
+            attn_mask = attn_mask.repeat(num_heads, 1, 1)
 
-        output = self.dropout(self.fc(output))
-        output = self.layer_norm(output + residual)
+        scale = None
+        if self.att_type == 'scaled-dot':
+            scale = math.sqrt(dim_per_head)
 
-        return output, attn
+        context, att_dist = self.dot_product_attention(query, key, value, scale, attn_mask)
+        heads = context.view(bsz, num_heads, -1)
+        # concat heads
+        context = context.view(bsz, num_heads*dim_per_head)
+
+        # final output projection
+        output = self.linear_final(context)
+
+        # dropout
+        output = self.dropout(output)
+
+        # add norm layer
+        # output = self.layer_norm(output)
+
+        return output, query.view(bsz, num_heads*dim_per_head), heads
 
 class luong_attention(nn.Module):
 
@@ -215,3 +353,65 @@ class bigru_attention(nn.Module):
         weights = self.softmax(weights)
         attn_out = torch.bmm(weights.unsqueeze(1)).squeeze(1)
         return attn_out, weights
+
+class Overparam(nn.Module):
+    def __init__(self, n_hidden_size):
+        super().__init__()
+        self.l1 = nn.Linear(n_hidden_size, 2 * n_hidden_size)
+        # self.l2 = nn.Linear(2 * nhid, 2 * nhid)
+        self.inner_act = torch.tanh # GELU()
+        self.hidden_size = n_hidden_size
+
+    def forward(self, x):
+        c, f = self.l1(x).split(self.hidden_size, dim=-1)
+        # c, f = self.l2(self.inner_act(self.l1(x))).split(self.nhid, dim=-1)
+        return torch.sigmoid(f) * torch.tanh(c)
+
+class FocusAttention(nn.Module):
+
+    def __init__(self, n_hidden_size):
+        super(FocusAttention, self).__init__()
+
+        self.query = nn.Parameter(torch.zeros(1, n_hidden_size)).float()
+
+        # self.query_projection = nn.Linear(in_features=n_hidden_size, out_features=n_hidden_size)
+        self.key_projection = nn.Linear(in_features=n_hidden_size, out_features=n_hidden_size)
+        # self.value_projection = nn.Linear(in_features=n_hidden_size, out_features=n_hidden_size)
+
+        self.over_param = Overparam(n_hidden_size=n_hidden_size)
+
+        self.n_hidden_size = n_hidden_size
+
+    def attention(self, query, key, value, mask=None):
+        # query: 1 x n_hsz
+        # key: bsz x seq_len x n_hsz
+        # value: bsz x seq_len x n_hsz
+        query = query.unsqueeze(1)
+
+        att = torch.matmul(query, key.transpose(1, 2)).squeeze(1)  # bsz x seq_len
+        att = att / math.sqrt(self.n_hidden_size)
+
+        if mask is not None:
+            att = att.masked_fill(mask=mask, value=-np.inf)
+        att = torch.softmax(att, dim=1)
+
+        context = torch.matmul(att.unsqueeze(1), value).squeeze(1)  # bsz x n_hsz
+
+        return att, context
+
+    def forward(self, key, value, key_features=None, mask=None, using_over_param=False):
+        # key: bsz x seq_len x n_hidden_size
+        if key_features is None:
+            key_features = self.key_projection(key)
+
+        query = self.query
+        # query_feature = self.query_projection(query)
+        query_feature = query
+        if using_over_param:
+            query_feature = self.over_param(query_feature)
+
+        # value = self.value_projection(key)
+        value = key
+        att, context = self.attention(query=query_feature, key=key_features, value=value)
+
+        return context, query.transpose(0,2)

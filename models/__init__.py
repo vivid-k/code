@@ -28,6 +28,8 @@ def setup(opt):
         if opt.option == "test":
             print("Load the best model from {}".format(opt.resume_from))
             model.load_state_dict(torch.load(os.path.join(opt.resume_from, 'model-best.pth')))
+            # model.load_state_dict(torch.load(os.path.join(opt.resume_from, 'model_iter_33000.pth')))
+            
         else:
             logging.info("Load pretrained model")
             model.load_state_dict(torch.load(os.path.join(opt.resume_from, 'model.pth')))
