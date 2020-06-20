@@ -189,7 +189,7 @@ def test(opt):
 if __name__ == "__main__":
 
     opt = opts.parse_opt()
-    opt.GPU_ids = 2
+    opt.GPU_ids = 0
 
     # 设置 GPU id
     torch.cuda.set_device(opt.GPU_ids)

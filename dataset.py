@@ -77,6 +77,8 @@ class VISTDataset(Dataset):
         for split in ['val', 'test']:
             reference = {}
             for story in self.story_line[split].values():
+                # if story['album_id'] == '72157594230490220':
+                #     print(story['origin_text'])
                 if story['album_id'] not in reference:
                     reference[story['album_id']] = [story['origin_text']]
                 else:
