@@ -169,10 +169,11 @@ class VisualEncoder(nn.Module):
                                  dropout=self.dropout, batch_first=True, bidirectional=False)
         if self.opt.mem:
             # self.linear_read = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
-            self.linear_read = nn.Sequential(nn.Linear(self.hidden_dim * 2, self.hidden_dim), nn.Sigmoid())
-            self.linear_write = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
+            self.linear_read = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
+            if self.opt.is_write:
+                self.linear_write = nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.Sigmoid())
             self.linear_mem = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
-            self.linear_q = nn.Linear(self.hidden_dim, self.hidden_dim)
+            # self.linear_q = nn.Linear(self.hidden_dim, self.hidden_dim)
             # self.linear_fun = nn.Sequential(nn.Linear(self.hidden_dim * 2, self.hidden_dim),
             #                             nn.BatchNorm1d(self.hidden_dim),
             #                             nn.ReLU(True))
@@ -198,7 +199,7 @@ class VisualEncoder(nn.Module):
             self.sigmoid = nn.Sigmoid()
         if self.opt.att:
             if self.opt.multihead:
-                self.focus = MultiHeadAttention(self.hidden_dim)
+                self.focus = MultiHeadAttention(self.hidden_dim, num_heads=self.opt.num_heads)
             else:
                 self.attention = luong_gate_attention(self.hidden_dim, self.embed_dim)
             # self.focus = FocusAttention(self.hidden_dim)
@@ -254,87 +255,46 @@ class VisualEncoder(nn.Module):
 
         out = self.relu(out)  # (batch_size, 5, embed_dim)
         state = (hidden[0].unsqueeze(0), hidden[1].unsqueeze(0))
-        if self.with_position:
+        if self.opt.with_position:
             position = torch.tensor([[0,1,2,3,4]]).repeat(batch_size, 1).cuda()
             pos = self.position_embed(position)
             out = out + pos
-        # tmp = out
+        heads = None
         if self.opt.dec:
             result = []            
-            if self.opt.mem:
-                # tmp = torch.cat((att, out), 2)
-                # mem = self.linear_fun(tmp)
-                case = 90
-                if self.opt.att:
+            if self.opt.mem:   
+                if self.opt.att:                  
                     if self.opt.multihead:
-                        mem, query, heads = self.focus(out, out)
+                        mem, query, heads = self.focus(out, out) # heads 64*4*128
                     else:
                         mem, query = self.focus(out, out)
-                    query = self.linear_q(query)
                 else:
-                    case = 9
-                if self.opt.swish:
-                    outputs = out.transpose(1,2)
-                    conv1 = self.sw1(outputs)
-                    conv3 = self.sw3(outputs)
-                    conv33 = self.sw33(outputs)
-                    conv = torch.cat((conv1, conv3, conv33), 1)
-                    conv = self.filter_linear(conv.transpose(1,2))
-                    if self.opt.context_dec:
-                        self.attention.init_context(context=conv)
-                        out_attn, weights = self.attention(conv, selfatt=True)
-                        gate = self.sigmoid(out_attn).transpose(0,1)
-                        # gate = self.relu(out_attn).transpose(0,1)
-                        # out = out * gate
-                        # mem = out * gate
-                        # mem = conv + out_attn.transpose(0,1)
-                                           
-                
-                if case == 0: # 最基本的，out不更新
-                    mem = out * self.sigmoid(conv)
-                elif case == 1: # done done
-                    out = out * self.sigmoid(conv)
-                    mem = out
-                elif case == 2: # done done
-                    out = out * self.sigmoid(conv)
-                    mem = out + emb
-                elif case == 3: # done emb:done
-                    out = out * self.sigmoid(conv)
-                    mem = conv
-                elif case == 4: # done done
-                    out = out * self.sigmoid(conv)
-                    mem = conv + emb
-                elif case == 6: # done done
-                    mem = out * self.sigmoid(conv)
-                    out = conv
-                elif case == 7: # done done
-                    out = conv
-                    mem = out + emb                   
-                elif case == 8: # best,不对啊
-                    mem = conv
-                elif case == 13:
-                    mem = self.out_linear(out.view(batch_size, -1))
-                    mem = self.tanh(mem)
-                    # out = tmp
-                elif case == 9: 
                     mem = out
                     mem = mem.sum(dim=1) # 64*512
-                else:
-                    pass
                 # self.attention.init_context(out)
                 for i in range(self.story_size):
                     # graph_res = graph_attn(self.opt.alpha, state[0].squeeze(), out, self.story_size) # 64*6*1
                     # graph_res = torch.matmul(out.transpose(1, 2), weights).squeeze()
                     # att, _ = self.attention(state[0].squeeze())
-                    g_r = self.linear_read(torch.cat([state[0].squeeze(), query], dim=-1))
-                    # g_r = self.linear_read(state[0].squeeze())
+                    # g_r = self.linear_read(torch.cat([state[0].squeeze(), query], dim=-1))
+                    g_w = torch.ones(batch_size, state[0].size(-1)).cuda()
+                    
+                    g_r = self.linear_read(state[0].squeeze())
+                    a = torch.mean(g_r, dim=-1)
+                    m = g_w * g_r
+                    b = torch.mean(torch.mean(g_r, dim=-1))
+                    f = torch.max(g_r, dim=-1)
                     mem_inp = g_r * mem
                     inp = torch.cat((out[:, i, :], mem_inp), 1)
                     inp = self.linear_mem(inp).unsqueeze(1) # 64*1*512
                     output, state = self.rnn_dec(inp, state)
-                    # g_w = self.linear_read(torch.cat([state[0].squeeze(), query.squeeze()], dim=-1))
-                    g_w = self.linear_write(state[0].squeeze())
-                    mem = g_w * mem
+                    if self.opt.is_write:
+                        g_w = self.linear_write(state[0].squeeze())
+                        mem = g_w * mem
+                        # mem -= mem_inp
+                        c = torch.mean(g_w, dim=-1)
+                        e = torch.max(g_w, dim=-1)
+                        d = torch.mean(torch.mean(g_w, dim=-1)) 
                     result.append(output.squeeze())
                 out = torch.stack(result).transpose(0, 1)
             else:
@@ -343,7 +303,7 @@ class VisualEncoder(nn.Module):
                     result.append(output.squeeze())
                 out = torch.stack(result).transpose(0, 1)
 
-        return out, state
+        return out, state, heads
 
 class CaptionEncoder(nn.Module):
 

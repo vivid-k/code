@@ -127,7 +127,7 @@ class BaseModel(nn.Module):
         if self.opt.caption: # 引入caption
             out_caption, enc_state = self.caption_encoder(caption, self.embed) # 320*20*512
         # 对图像特征编码
-        out_e, enc_state = self.encoder(features) # out_e：64*5*512
+        out_e, enc_state, heads = self.encoder(features) # out_e：64*5*512
         out_e = out_e.contiguous()
         out_e = out_e.view(-1, out_e.size(2)) # 320*512
         story_t = story_t.view(-1, story_t.size(2)) # 320*30
@@ -164,7 +164,7 @@ class BaseModel(nn.Module):
                 break
 
         outputs = torch.cat([_.unsqueeze(1) for _ in outputs], 1)  # batch_size * 5, -1, vocab_size
-        return outputs.view(-1, self.story_size, outputs.size(1), self.vocab_size)
+        return outputs.view(-1, self.story_size, outputs.size(1), self.vocab_size), heads
 
     def predict(self, features, caption=None, beam_size=5):
         # beamsearch计算最终结果
@@ -172,7 +172,7 @@ class BaseModel(nn.Module):
         if beam_size == 1:  # if beam_size is 1, then do greedy decoding, otherwise use beam search
             return self.sample(features, sample_max=True, rl_training=False)
         
-        out_e, enc_state = self.encoder(features) # encode the visual features 64*5*512
+        out_e, _, _ = self.encoder(features) # encode the visual features 64*5*512
         out_e = out_e.contiguous()
         out_e = out_e.view(-1, out_e.size(2)) # 320*512
         if self.opt.caption:
@@ -411,7 +411,7 @@ class BaseModel(nn.Module):
             return self.sample(features, sample_max=True, rl_training=False)
 
         # encode the visual features
-        out_e, _ = self.encoder(features)
+        out_e, _, _ = self.encoder(features)
 
         # reshape the inputs, making the sentence generation separately
         out_e = out_e.view(-1, out_e.size(2))

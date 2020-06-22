@@ -12,7 +12,8 @@ import os
 处理文本数据，提取出story，并构建词表
 """
 base_path = "AREL-data-process/"
-train_data = json.load(open(osp.join(base_path, "train.story-in-sequence.json")))
+train_data = json.load(open(osp.join(base_path, "test.story-in-sequence.json")))
+# train_data = None
 val_data = json.load(open(osp.join(base_path, "val.story-in-sequence.json")))
 test_data = json.load(open(osp.join(base_path, "test.story-in-sequence.json")))
 
@@ -22,6 +23,8 @@ whole_album2im = {}
 for i, data in enumerate([train_data, val_data, test_data]):
     album2im = {} # 按照album存储图像数据，键为album_id，值为img_id，1-多
     for im in data['images']: # 遍历每一张图像
+        if im['id'] == '210929621':
+            print(im)
         if im['album_id'] not in album2im: # 以album区分，若album_id并未存储，则为新的album
             album2im[im['album_id']] = [im['id']]
         else: # 该album已存在，则append，注意数据已经按照时间排序

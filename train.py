@@ -89,7 +89,10 @@ def train(opt):
     # 创建Evaluator
     evaluator = Evaluator(opt, 'val')
     # 损失
-    crit = criterion.LanguageModelCriterion()
+    if not opt.addloss:
+        crit = criterion.LanguageModelCriterion()
+    else:
+        crit = criterion.MultiheadCriterion()
     # 是否使用强化学习，默认为-1
     if opt.start_rl >= 0:
         rl_crit = criterion.ReinforceCriterion(opt, dataset)
@@ -123,8 +126,11 @@ def train(opt):
             optimizer.zero_grad()
 
             # 模型运行，返回一个概率分布，然后计算交叉熵损失
-            output = model(features, target, caption)
-            loss = crit(output, target)
+            output, heads = model(features, target, caption)
+            if opt.addloss:
+                loss = crit(output, target, heads)
+            else:
+                loss = crit(output, target)
 
             if opt.start_rl >= 0 and epoch >= opt.start_rl:  # reinforcement learning
                 # 获取 sample 数据和 baseline 数据
@@ -189,28 +195,32 @@ def test(opt):
 if __name__ == "__main__":
 
     opt = opts.parse_opt()
-    opt.GPU_ids = 0
+    opt.GPU_ids = 3
 
     # 设置 GPU id
     torch.cuda.set_device(opt.GPU_ids)
     opt.batch_size = 64
     opt.save_checkpoint_every = 1000
     opt.caption = False
-
     opt.self_att = False
     opt.cnn_cap = False
     opt.bi = False
+    opt.trick = True
+
     opt.dec = True
     opt.mem = True
-    # opt.context_dec = True
-    opt.trick = True
+    opt.is_write = True
+
     opt.att = True
+    opt.multihead = True
+    opt.num_heads = 8
+
     opt.option = 'train'
-    opt.with_position = True
-    # opt.option = 'test'
-    
-    # opt.id = 'test'
-    # opt.resume_from = "./data/hlst/"
+    # opt.addloss = True
+    # opt.with_position = True
+    opt.option = 'test'
+
+    opt.resume_from = "./data/head8/"
     # 训练模式还是测试模式
     if opt.option == 'train':
         print('Begin training:')

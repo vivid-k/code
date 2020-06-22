@@ -17,6 +17,9 @@ def to_contiguous(tensor):
         return tensor.contiguous()
 
 
+
+
+
 class ReinforceCriterion(nn.Module):
     def __init__(self, opt, dataset):
         super(ReinforceCriterion, self).__init__()
@@ -135,3 +138,53 @@ class LanguageModelCriterion(nn.Module):
         entropy = torch.sum(entropy) / torch.sum(mask)
 
         return output + self.weight * entropy
+
+class MultiheadCriterion(nn.Module):
+    def __init__(self, weight=0.0):
+        self.weight = weight
+        super(MultiheadCriterion, self).__init__()
+    def disagree_regularization(self, heads):
+        """self-attention 多头之间的多样性，相当于 regularization
+        """
+        head_num = heads.size(1)
+        regular_res = 0.0
+        for i in range(head_num):
+            for j in range(head_num):
+                if i != j:
+                    regular_res += torch.cosine_similarity(heads[:, i, :], heads[:, j, :], dim=-1)
+        return torch.mean(regular_res / (head_num ** 2))
+
+    def forward(self, input, target, heads, weights=None, compute_prob=False):
+        # input 64*5*30*9837；target 64*5*30; head: 64*head*hidden/head
+        # 计算损失
+        if len(target.size()) == 3:  # separate story
+            input = input.view(-1, input.size(2), input.size(3))
+            target = target.view(-1, target.size(2))
+        seq_length = input.size(1)
+        # truncate to the same size
+        target = target[:, :input.size(1)]
+        mask = (target > 0).float() # 获取mask矩阵，target值>0的=1，其余为0，mask 320*30
+        mask = to_contiguous(torch.cat([Variable(mask.data.new(mask.size(0), 1).fill_(1)), mask[:, :-1]], 1))
+
+        # reshape the variables
+        input = to_contiguous(input).view(-1, input.size(2)) # 9600*9387
+        target = to_contiguous(target).view(-1, 1) #9600*1
+        mask = mask.view(-1, 1)
+
+        if weights is None:
+            output = - input.gather(1, target) * mask
+        else:
+            output = - input.gather(1, target) * mask * to_contiguous(weights).view(-1, 1)
+
+        if compute_prob:
+            output = output.view(-1, seq_length)
+            mask = mask.view(-1, seq_length)
+            return output.sum(-1) / mask.sum(-1)
+
+        output = torch.sum(output) / torch.sum(mask)
+
+        entropy = -(torch.exp(input) * input).sum(-1) * mask
+        entropy = torch.sum(entropy) / torch.sum(mask)
+
+        dis = self.disagree_regularization(heads)
+        return output + self.weight * entropy + dis

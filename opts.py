@@ -17,7 +17,7 @@ def parse_opt():
     parser.add_argument('--mem', type=bool, default=False)
     parser.add_argument('--swish', type=bool, default=False)
     parser.add_argument('--att', type=bool, default=False)
-    parser.add_argument('--multihead', type=bool, default=True)
+    parser.add_argument('--multihead', type=bool, default=False)
 
 
     # album
@@ -29,7 +29,14 @@ def parse_opt():
     parser.add_argument('--id', type=str, default='test', help='an id identifying this run/job')
     parser.add_argument('--scale', type=float, default=0.2, help='prevent the repeat in beam search')
     parser.add_argument('--alpha', type=float, default=0.2, help='prevent the repeat in beam search')
-
+    parser.add_argument('--with_position', type=bool, default=False,
+                        help='whether to use position embedding for the image feature')
+    parser.add_argument('--addloss', type=bool, default=False,
+                        help='whether to use position embedding for the image feature')
+    parser.add_argument('--is_write', type=bool, default=False,
+                        help='whether to use position embedding for the image feature')
+    parser.add_argument('--num_heads', type=int, default=4, help='the number of heads of multihead attention')
+                       
     # Data input settings
     parser.add_argument('--data_dir', type=str, default='./VIST')
     # parser.add_argument('--data_dir', type=str, default='../datasets/VIST')
@@ -58,11 +65,10 @@ def parse_opt():
     parser.add_argument('--use_conv', type=bool, default=False)
     parser.add_argument('--story_size', type=int, default=5,
                         help='number of images/sentences appearing in each story')
-    parser.add_argument('--with_position', type=bool, default=False,
-                        help='whether to use position embedding for the image feature')
+
 
     # Optimization: General
-    parser.add_argument('--max_epochs', type=int, default=100,
+    parser.add_argument('--max_epochs', type=int, default=60,
                         help='number of epochs')
     parser.add_argument('--shuffle', type=bool, default=True,
                         help='set to True to have the data reshuffled at every epoch during training ')

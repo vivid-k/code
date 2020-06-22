@@ -168,6 +168,7 @@ class MultiHeadAttention(nn.Module):
         self.layer_norm = nn.LayerNorm(n_hidden_size)
 
         self.att_type = att_type
+        # self.layer_norm = nn.LayerNorm(n_hidden_size)
 
     def forward(self, key, value, attn_mask=None):
         """
@@ -215,9 +216,10 @@ class MultiHeadAttention(nn.Module):
         output = self.dropout(output)
 
         # add norm layer
+        query = query.view(bsz, num_heads*dim_per_head)
+        # output = self.layer_norm(output + query)
         # output = self.layer_norm(output)
-
-        return output, query.view(bsz, num_heads*dim_per_head), heads
+        return output, query, heads
 
 class luong_attention(nn.Module):
 

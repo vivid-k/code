@@ -123,11 +123,14 @@ class Evaluator:
                     output = model(feature_fc, target, story)
             else:
                 if conv_feature is not None:
-                    output = model(feature_fc, target, conv_feature)
+                    output, heads = model(feature_fc, target, conv_feature)
                 else:
-                    output = model(feature_fc, target, caption) # 调用basemodel中的forward函数
+                    output, heads = model(feature_fc, target, caption) # 调用basemodel中的forward函数
             # 计算 loss
-            loss = crit(output, target).item()
+            if opt.addloss:
+                loss = crit(output, target, heads).item()
+            else:
+                loss = crit(output, target).item()
             loss_sum += loss
             loss_evals += 1
             # forward the model to also get generated samples for each video
